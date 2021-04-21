@@ -2,16 +2,9 @@ name: Magisk Build
 
 on:
   push:
-    branches: [ master ]
-    paths:
-      - 'app/**'
-      - 'native/**'
-      - 'stub/**'
-      - 'buildSrc/**'
-      - 'build.py'
-      - 'gradle.properties'
+    branches: [ alpha ]
   pull_request:
-    branches: [ master ]
+    branches: [ alpha ]
   workflow_dispatch:
 
 jobs:
@@ -45,6 +38,7 @@ jobs:
           ndk_ver=$(sed -n 's/^magisk.fullNdkVersion=//p' gradle.properties)
           echo ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT >> $GITHUB_ENV
           echo MAGISK_NDK_VERSION=$ndk_ver >> $GITHUB_ENV
+          echo 'org.gradle.jvmargs=-Xmx3096m' >> gradle.properties
         shell: bash
 
       - name: Cache Gradle
