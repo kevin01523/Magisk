@@ -24,6 +24,9 @@ bool is_deny_target(int uid, std::string_view process);
 void revert_daemon(int pid, int client);
 void revert_unmount(int pid = -1);
 
+// Props
+void hide_sensitive_props();
+
 extern std::atomic<bool> denylist_enabled;
 
 enum : int {

@@ -311,6 +311,12 @@ void initialize_denylist() {
     }
 }
 
+void reset_sensitive_props() {
+    if (denylist_enabled) {
+        hide_sensitive_props();
+    }
+}
+
 bool is_deny_target(int uid, string_view process) {
     mutex_guard lock(data_lock);
 

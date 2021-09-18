@@ -34,7 +34,8 @@ LOCAL_SRC_FILES := \
     zygisk/memory.cpp \
     zygisk/deny/cli.cpp \
     zygisk/deny/utils.cpp \
-    zygisk/deny/revert.cpp
+    zygisk/deny/revert.cpp \
+    zygisk/deny/props.cpp
 
 LOCAL_LDLIBS := -llog
 

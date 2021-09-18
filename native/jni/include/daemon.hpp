@@ -65,3 +65,4 @@ void zygisk_handler(int client, ucred *cred);
 void initialize_denylist();
 int disable_deny();
 int denylist_cli(int argc, char **argv);
+void reset_sensitive_props();
