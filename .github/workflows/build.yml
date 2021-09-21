@@ -2,9 +2,9 @@ name: Magisk Build
 
 on:
   push:
-    branches: [ 0ab31ab0-alpha-backup ]
+    branches: [ alphatest ]
   pull_request:
-    branches: [ 0ab31ab0-alpha-backup ]
+    branches: [ alphatest ]
   workflow_dispatch:
 
 jobs:
