@@ -28,6 +28,7 @@ void revert_unmount(int pid = -1);
 void hide_sensitive_props();
 
 extern std::atomic<bool> denylist_enabled;
+extern int cached_manager_app_id;
 
 enum : int {
     ENFORCE_DENY,
