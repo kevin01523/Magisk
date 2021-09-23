@@ -16,7 +16,6 @@
 using namespace std;
 
 static void *self_handle = nullptr;
-static atomic<int> active_threads = -1;
 
 static int zygisk_log(int prio, const char *fmt, va_list ap);
 
@@ -31,27 +30,19 @@ static void zygisk_logging() {
 
 void self_unload() {
     LOGD("zygisk: Request to self unload\n");
-    // If deny failed, do not unload or else it will cause SIGSEGV
+    // If unhooking failed, do not unload or else it will cause SIGSEGV
     if (!unhook_functions())
         return;
     new_daemon_thread(reinterpret_cast<thread_entry>(&dlclose), self_handle);
-    active_threads--;
 }
 
-static void *unload_first_stage(void *v) {
-    // Setup 1ms
-    timespec ts = { .tv_sec = 0, .tv_nsec = 1000000L };
-
-    while (getenv(INJECT_ENV_1))
-        nanosleep(&ts, nullptr);
-
-    // Wait another 1ms to make sure all threads left our code
-    nanosleep(&ts, nullptr);
-
-    char *path = static_cast<char *>(v);
+static void unload_first_stage(int, siginfo_t *info, void *) {
+    auto path = static_cast<char *>(info->si_value.sival_ptr);
     unmap_all(path);
-    active_threads--;
-    return nullptr;
+    free(path);
+    struct sigaction action{};
+    action.sa_handler = SIG_DFL;
+    sigaction(SIGUSR1, &action, nullptr);
 }
 
 // Make sure /proc/self/environ is sanitized
@@ -60,13 +51,7 @@ static void sanitize_environ() {
     char *cur = environ[0];
 
     for (int i = 0; environ[i]; ++i) {
-        if (str_starts(environ[i], INJECT_ENV_1 "=")) {
-            // This specific env has to live in heap
-            environ[i] = strdup(environ[i]);
-            continue;
-        }
-
-        // Copy all filtered env onto the original stack
+        // Copy all env onto the original stack
         int len = strlen(environ[i]);
         memmove(cur, environ[i], len + 1);
         environ[i] = cur;
@@ -77,64 +62,86 @@ static void sanitize_environ() {
 }
 
 __attribute__((destructor))
-static void inject_cleanup_wait() {
-    if (active_threads < 0)
-        return;
-
-    // Setup 1ms
-    timespec ts = { .tv_sec = 0, .tv_nsec = 1000000L };
-
-    // Check flag in busy loop
-    while (active_threads)
+static void zygisk_cleanup_wait() {
+    if (self_handle) {
+        // Wait 10us to make sure none of our code is executing
+        timespec ts = { .tv_sec = 0, .tv_nsec = 10000L };
         nanosleep(&ts, nullptr);
+    }
+}
 
-    // Wait another 1ms to make sure all threads left our code
-    nanosleep(&ts, nullptr);
+#define SECOND_STAGE_PTR "ZYGISK_PTR"
+
+static void second_stage_entry(void *handle, char *path) {
+    self_handle = handle;
+    unsetenv(INJECT_ENV_2);
+    unsetenv(SECOND_STAGE_PTR);
+
+    zygisk_logging();
+    LOGD("zygisk: inject 2nd stage\n");
+    hook_functions();
+
+    // Register signal handler to unload 1st stage
+    struct sigaction action{};
+    action.sa_sigaction = unload_first_stage;
+    sigaction(SIGUSR1, &action, nullptr);
+
+    // Schedule to unload 1st stage 10us later
+    timer_t timer;
+    sigevent_t event{};
+    event.sigev_notify = SIGEV_SIGNAL;
+    event.sigev_signo = SIGUSR1;
+    event.sigev_value.sival_ptr = path;
+    timer_create(CLOCK_MONOTONIC, &event, &timer);
+    itimerspec time{};
+    time.it_value.tv_nsec = 10000L;
+    timer_settime(&timer, 0, &time, nullptr);
+}
+
+static void first_stage_entry() {
+    android_logging();
+    LOGD("zygisk: inject 1st stage\n");
+
+    char *ld = getenv("LD_PRELOAD");
+    char *path;
+    if (char *c = strrchr(ld, ':')) {
+        *c = '\0';
+        setenv("LD_PRELOAD", ld, 1);  // Restore original LD_PRELOAD
+        path = strdup(c + 1);
+    } else {
+        unsetenv("LD_PRELOAD");
+        path = strdup(ld);
+    }
+    unsetenv(INJECT_ENV_1);
+    sanitize_environ();
+
+    // Update path to 2nd stage lib
+    *(strrchr(path, '.') - 1) = '2';
+
+    // Load second stage
+    setenv(INJECT_ENV_2, "1", 1);
+    void *handle = dlopen(path, RTLD_LAZY);
+    remap_all(path);
+
+    // Revert path to 1st stage lib
+    *(strrchr(path, '.') - 1) = '1';
+
+    // Run second stage entry
+    char *env = getenv(SECOND_STAGE_PTR);
+    decltype(&second_stage_entry) second_stage;
+    sscanf(env, "%p", &second_stage);
+    second_stage(handle, path);
 }
 
 __attribute__((constructor))
-static void inject_init() {
-    if (char *env = getenv(INJECT_ENV_2)) {
-        zygisk_logging();
-        LOGD("zygisk: inject 2nd stage\n");
-        active_threads = 1;
-        unsetenv(INJECT_ENV_2);
-
-        // Get our own handle
-        self_handle = dlopen(env, RTLD_LAZY);
-        dlclose(self_handle);
-
-        hook_functions();
-
-        // Update path to 1st stage lib
-        *(strrchr(env, '.') - 1) = '1';
-
-        active_threads++;
-        new_daemon_thread(&unload_first_stage, env);
+static void zygisk_init() {
+    if (getenv(INJECT_ENV_2)) {
+        // Return function pointer to first stage
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%p", &second_stage_entry);
+        setenv(SECOND_STAGE_PTR, buf, 1);
     } else if (getenv(INJECT_ENV_1)) {
-        android_logging();
-        LOGD("zygisk: inject 1st stage\n");
-
-        string ld = getenv("LD_PRELOAD");
-        char *path;
-        if (char *c = strrchr(ld.data(), ':')) {
-            *c = '\0';
-            setenv("LD_PRELOAD", ld.data(), 1);  // Restore original LD_PRELOAD
-            path = c + 1;
-        } else {
-            unsetenv("LD_PRELOAD");
-            path = ld.data();
-        }
-        sanitize_environ();
-
-        // Update path to 2nd stage lib
-        *(strrchr(path, '.') - 1) = '2';
-
-        // Setup second stage
-        setenv(INJECT_ENV_2, path, 1);
-        dlopen(path, RTLD_LAZY);
-
-        unsetenv(INJECT_ENV_1);
+        first_stage_entry();
     }
 }
 
