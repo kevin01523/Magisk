@@ -41,6 +41,7 @@ object Config : PreferenceModel, DBConfig {
         const val DENYLIST = "denylist"
         const val SU_MANAGER = "requester"
         const val KEYSTORE = "keystore"
+        const val CERTDIGEST = "cert_digest"
 
         // prefs
         const val SU_REQUEST_TIMEOUT = "su_request_timeout"
@@ -149,6 +150,7 @@ object Config : PreferenceModel, DBConfig {
     var denyList by DBBoolSettingsNoWrite(Key.DENYLIST, false)
     var suManager by dbStrings(Key.SU_MANAGER, "", true)
     var keyStoreRaw by dbStrings(Key.KEYSTORE, "", true)
+    var certDigest by dbStrings(Key.CERTDIGEST, "", true)
 
     val allDbSettings
         get() = HashMap<String, String>().apply {
